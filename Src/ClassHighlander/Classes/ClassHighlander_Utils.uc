@@ -4,6 +4,8 @@ class ClassHighlander_Utils extends Object config(ClassHighlander);
 var config array<string> PendingLockedMECTitles;
 // The fallback class used when no class is available anymore
 var config name FallbackClass;
+// If true, psi soldiers are not limited to one
+var config bool bMultiplePsiSoldiers;
 // True if config fallback class has not been found in game.
 var config bool bFallbackClassInvalid;
 // Fallback class previously set in config if it is not found

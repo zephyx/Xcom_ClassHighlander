@@ -1,5 +1,7 @@
 class X2DownloadableContentInfo_ClassHighlander extends X2DownloadableContentInfo;
 
+var delegate<X2StaffSlotTemplate.IsUnitValidForSlot> OriginalIsUnitValidForPsiSlotFn;
+
 static event InstallNewCampaign(XComGameState StartState)
 {
     RegisterEvents();
@@ -31,6 +33,8 @@ static event OnPostTemplatesCreated()
 
     // Check the fallback class is really available, otherwise pick a new one.
     ValidateAndSetFallbackClass();
+    // Limit to 1 psi soldiers
+    LimitPsiSoldier();
 
     if (!class'XComGameState_HeadquartersProject_Introspection'.default.bPsiLabIntro) {
         `LOG("ClassHighlander : bPsiLabIntro=false -> skip.");
@@ -112,6 +116,123 @@ static function ValidateAndSetFallbackClass()
         $ "' for this session. Please update FallbackClass in XComClassHighlander.ini."
     );
 }
+
+static function LimitPsiSoldier()
+{
+    local X2StrategyElementTemplateManager          StratMgr;
+    local X2StaffSlotTemplate                       PsiSlotTemplate;
+    local X2DownloadableContentInfo_ClassHighlander DLCInfo;
+    local array<X2DownloadableContentInfo>          DLCInfos;
+    local int                                       i;
+
+    // Check if we should limit psi soldier to one: if no => do nothing
+    if (class'ClassHighlander_Utils'.default.bMultiplePsiSoldiers) {
+        return;
+    }
+
+    // If yes => modify psi chamber validation functions
+    StratMgr = class'X2StrategyElementTemplateManager'.static.GetStrategyElementTemplateManager();
+    PsiSlotTemplate = X2StaffSlotTemplate(StratMgr.FindStrategyElementTemplate('PsiChamberSoldierStaffSlot'));
+
+    if (PsiSlotTemplate != none) {
+        `LOG("ClassHighlander : Override psi check.");
+
+        // Memorize the old isValid function in order to run it before ours.
+        DLCInfos = `ONLINEEVENTMGR.GetDLCInfos(false);
+        for (i = 0; i < DLCInfos.Length; i++) {
+            DLCInfo = X2DownloadableContentInfo_ClassHighlander(DLCInfos[i]);
+            if (DLCInfo != none)
+                break;
+        }
+        if (DLCInfo != none) {
+            DLCInfo.OriginalIsUnitValidForPsiSlotFn = PsiSlotTemplate.IsUnitValidForSlotFn;
+        }
+
+        PsiSlotTemplate.IsUnitValidForSlotFn = IsUnitValidForPsiChamberSlot_CH;
+        PsiSlotTemplate.GetValidUnitsForSlotFn = GetValidUnitsForPsiChamberSlot_CH;
+    }
+}
+
+function bool IsUnitValidForPsiChamberSlot_CH(
+    XComGameState_StaffSlot SlotState,
+    StaffUnitInfo UnitInfo)
+{
+    local XComGameStateHistory           History;
+    local XComGameState_HeadquartersXCom XComHQ;
+    local XComGameState_Unit             UnitState;
+    local XComGameState_Unit             CrewUnit;
+    local int                            i;
+
+    // Call the original validation -> if false we stop here
+    if (OriginalIsUnitValidForPsiSlotFn != none) {
+        `LOG("ClassHighlander Psi original : ");
+
+        if (!OriginalIsUnitValidForPsiSlotFn(SlotState, UnitInfo)) {
+            return false;
+        }
+    }
+
+    UnitState = XComGameState_Unit(`XCOMHISTORY.GetGameStateForObjectID(UnitInfo.UnitRef.ObjectID));
+    if (UnitState == none) return false;
+
+    // If the checked soldier is a PsiOperative => ok
+    if (UnitState.GetSoldierClassTemplateName() == 'PsiOperative') {
+        return true;
+    }
+
+    // Search if a PsiOperative is already in roster
+    History = `XCOMHISTORY;
+    XComHQ  = XComGameState_HeadquartersXCom(History.GetSingleGameStateObjectForClass(class'XComGameState_HeadquartersXCom'));
+
+    for (i = 0; i < XComHQ.Crew.Length; i++) {
+        CrewUnit = XComGameState_Unit(History.GetGameStateForObjectID(XComHQ.Crew[i].ObjectID));
+        if (CrewUnit == none)                        continue;
+        if (CrewUnit.ObjectID == UnitState.ObjectID) continue;
+        if (!CrewUnit.IsSoldier())                   continue;
+        if (CrewUnit.IsDead())                       continue;
+
+        if (CrewUnit.GetSoldierClassTemplateName() == 'PsiOperative') {
+            `LOG("ClassHighlander Psi : " $ UnitState.GetFullName()
+                $ " no allowed - PsiOperative already there ("
+                $ CrewUnit.GetFullName() $ ").");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static function array<StaffUnitInfo> GetValidUnitsForPsiChamberSlot_CH(
+    XComGameState_StaffSlot SlotState)
+{
+    local XComGameStateHistory           History;
+    local XComGameState_HeadquartersXCom XComHQ;
+    local XComGameState_Unit             UnitState;
+    local StaffUnitInfo                  UnitInfo;
+    local array<StaffUnitInfo>           ValidUnits;
+    local int                            i;
+
+    History = `XCOMHISTORY;
+    XComHQ  = XComGameState_HeadquartersXCom(History.GetSingleGameStateObjectForClass(class'XComGameState_HeadquartersXCom'));
+
+    for (i = 0; i < XComHQ.Crew.Length; i++) {
+        UnitState = XComGameState_Unit(History.GetGameStateForObjectID(XComHQ.Crew[i].ObjectID));
+        if (UnitState == none) continue;
+
+        UnitInfo.UnitRef = UnitState.GetReference();
+        if (SlotState.ValidUnitForSlot(UnitInfo)) {
+            ValidUnits.AddItem(UnitInfo);
+        }
+    }
+
+    return ValidUnits;
+}
+
+
+
+
+
+
 
 // Register all needed events
 static function RegisterEvents()
@@ -225,6 +346,10 @@ static function EventListenerReturn OnFirstPromotionOverrideClass(
 
     // If the chosen class is available, do nothing
     if (AssignedClass == '' || LockedClasses.Find(AssignedClass) == INDEX_NONE)
+        return ELR_NoInterrupt;
+
+    // If the chosen class is psiOperative, do nothing, otherwise once a rookie is trained as psiOperative (when multiple psi allowed) it would be modified. The uniqueness is handled by IsUnitValidForPsiChamberSlot_CH
+    if (AssignedClass == 'PsiOperative')
         return ELR_NoInterrupt;
 
     `LOG("ClassHighlander Promo : Locked class -> " $ AssignedClass);
