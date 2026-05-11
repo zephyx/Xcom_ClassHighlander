@@ -279,17 +279,7 @@ static function RegisterEvents()
 		50
 	);
 
-	// Black Market monthly refreshing
-    `XEVENTMGR.UnRegisterFromEvent(ListenerObj, 'BlackMarketGoodsReset');
-    `XEVENTMGR.RegisterForEvent(
-        ListenerObj,
-        'BlackMarketGoodsReset',
-        OnBlackMarketGoodsReset,
-        ELD_Immediate, 
-		50
-    );
-
-    // Missions reward generation
+    // Missions and black market reward generation
 	`XEVENTMGR.UnRegisterFromEvent(ListenerObj, 'RewardUnitGenerated');
 	`XEVENTMGR.RegisterForEvent(
 		ListenerObj, 
@@ -489,123 +479,6 @@ static function EventListenerReturn OnFinalizeMecTrooperClasses(
     }
 
     return ELR_NoInterrupt;
-}
-
-static function EventListenerReturn OnBlackMarketGoodsReset(
-    Object EventData,
-    Object EventSource,
-    XComGameState NewGameState,
-    Name EventID,
-    Object CallbackData)
-{
-    local XComGameState_BlackMarket BMState;
-
-    BMState = XComGameState_BlackMarket(EventData);
-    if (BMState == none) return ELR_NoInterrupt;
-
-    BMState = XComGameState_BlackMarket(NewGameState.ModifyStateObject(class'XComGameState_BlackMarket', BMState.ObjectID));
-
-    FilterAndReplaceBlackMarketItems(BMState, NewGameState);
-
-    return ELR_NoInterrupt;
-}
-
-// Replace unavailable classes if needed
-static function FilterAndReplaceBlackMarketItems(
-    XComGameState_BlackMarket   BMState,
-    XComGameState               NewGameState)
-{
-    local XComGameState_Reward      RewardState;
-    local array<name>               LockedClasses;
-    local array<int>                SlotsToReplace;
-    local array<StrategyCost>       RemovedCosts;  // Keep the old costs
-    local name                      ClassName;
-    local int                       i;
-
-    LockedClasses = class'ClassHighlander_Utils'.static.GetAllLockedClasses(eClassCheck_BlackMarket);
-    if (LockedClasses.Length == 0) return;
-
-    for (i = 0; i < BMState.ForSaleItems.Length; i++) {
-        RewardState = XComGameState_Reward(`XCOMHISTORY.GetGameStateForObjectID(BMState.ForSaleItems[i].RewardRef.ObjectID));
-        if (RewardState == none) continue;
-
-        ClassName = class'ClassHighlander_Utils'.static.GetClassFromReward(RewardState);
-        if (ClassName == '') continue;
-
-        if (LockedClasses.Find(ClassName) != INDEX_NONE) {
-            `LOG("ClassHighlander BM : Slot to replace -> " $ ClassName);
-            RemovedCosts[i] = BMState.ForSaleItems[i].Cost;
-            SlotsToReplace.AddItem(i);
-        }
-    }
-
-    if (SlotsToReplace.Length > 0) {
-        ReplaceBlackMarketSlots(BMState, NewGameState, SlotsToReplace, LockedClasses, RemovedCosts);
-    }
-}
-
-static function ReplaceBlackMarketSlots(
-    XComGameState_BlackMarket   BMState,
-    XComGameState               NewGameState,
-    array<int>                  SlotsToReplace,
-    array<name>                 LockedClasses,
-    array<StrategyCost>         RemovedCosts)
-{
-    local X2StrategyElementTemplateManager  StratMgr;
-    local X2RewardTemplate                  SoldierRewardTemplate;
-    local XComGameState_Reward              NewRewardState;
-    local Commodity                         NewItem, EmptyItem;
-    local array<name>                       AlreadyInBM;
-    local int                               i, Attempts;
-    local name                              NewClassName;
-
-    StratMgr = class'X2StrategyElementTemplateManager'.static.GetStrategyElementTemplateManager();
-    SoldierRewardTemplate = X2RewardTemplate(StratMgr.FindStrategyElementTemplate('Reward_Soldier'));
-
-    if (SoldierRewardTemplate == none)
-        return;
-
-    // Collect existing (After filter)
-    for (i = 0; i < BMState.ForSaleItems.Length; i++) {
-        NewClassName = class'ClassHighlander_Utils'.static.GetClassFromReward( XComGameState_Reward(`XCOMHISTORY.GetGameStateForObjectID(BMState.ForSaleItems[i].RewardRef.ObjectID)));
-
-        if (NewClassName != '' && AlreadyInBM.Find(NewClassName) == INDEX_NONE)
-            AlreadyInBM.AddItem(NewClassName);
-    }
-
-    // Replace SLOT BY SLOT
-    for (i = 0; i < SlotsToReplace.Length; i++) {
-        Attempts = 0;
-
-        while (Attempts < 100) {
-            Attempts++;
-
-            NewRewardState = SoldierRewardTemplate.CreateInstanceFromTemplate(NewGameState);
-            NewRewardState.GenerateReward(NewGameState, , BMState.Region);
-
-            NewClassName = class'ClassHighlander_Utils'.static.GetClassFromReward(NewRewardState);
-
-            if (NewClassName == '')                             continue;
-            if (LockedClasses.Find(NewClassName) != INDEX_NONE) continue;
-            if (AlreadyInBM.Find(NewClassName) != INDEX_NONE)   continue;
-
-            NewItem = EmptyItem;
-            NewItem.RewardRef       = NewRewardState.GetReference();
-            NewItem.Title           = NewRewardState.GetRewardString();
-            NewItem.Desc            = NewRewardState.GetBlackMarketString();
-            NewItem.Image           = NewRewardState.GetRewardImage();
-            NewItem.Cost            = BMState.ForSaleItems[SlotsToReplace[i]].Cost; //Original cost
-            NewItem.CostScalars     = BMState.GoodsCostScalars;
-            NewItem.DiscountPercent = BMState.GoodsCostPercentDiscount;
-
-            BMState.ForSaleItems[SlotsToReplace[i]] = NewItem;
-            AlreadyInBM.AddItem(NewClassName);
-
-            `LOG("ClassHighlander BM : Replace slot " $ SlotsToReplace[i] $ " -> " $ NewClassName);
-
-            break;
-        }
-    }
 }
 
 static function EventListenerReturn OnRewardUnitGenerated(
