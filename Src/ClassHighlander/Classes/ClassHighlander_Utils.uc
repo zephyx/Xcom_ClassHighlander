@@ -1,20 +1,5 @@
 class ClassHighlander_Utils extends Object config(ClassHighlander);
 
-// Memorize the MEC classes name displayed which are forbidden (no access to class id in UI)
-var config array<string> PendingLockedMECTitles;
-// The fallback class used when no class is available anymore
-var config name FallbackClass;
-// If true, psi soldiers are not limited to one
-var config bool bMultiplePsiSoldiers;
-// True if config fallback class has not been found in game.
-var config bool bFallbackClassInvalid;
-// Fallback class previously set in config if it is not found
-var config name FallbackClassReplaced;
-
-var localized string strFallbackWarningTitle;
-var localized string strFallbackWarningText;
-var localized string strFallbackWarningAccept;
-
 enum EClassCheckContext
 {
     eClassCheck_Promotion,
@@ -22,6 +7,81 @@ enum EClassCheckContext
     eClassCheck_BlackMarket,
     eClassCheck_MissionReward
 };
+
+struct ParsedFallbackClass
+{
+    var name ClassName;
+    var bool bSoft;    // true = {}, same behaviour than normal class
+    var bool bValid;   // false = not found in class manager
+};
+
+// Parsed cache, calculated in OnPostTemplatesCreated
+var config array<ParsedFallbackClass> CachedFallbackClasses;
+var config bool                       bFallbackCacheDirty;
+
+// Memorize the MEC classes name displayed which are forbidden (no access to class id in UI)
+var config array<string> PendingLockedMECTitles;
+// The fallback class used when no class is available anymore
+var config string FallbackClass;
+// If true, psi soldiers are not limited to one
+var config bool bMultiplePsiSoldiers;
+// True if config fallback class has not been found in game.
+var config bool bFallbackClassInvalid;
+// Fallback classes previously set in config if they are not found
+var config string FallbackClassReplaced;
+
+var localized string strFallbackWarningTitle;
+var localized string strFallbackWarningText;
+var localized string strFallbackWarningAccept;
+
+// Retrieve the fallback class(se)
+static function array<ParsedFallbackClass> GetParsedFallbackClasses()
+{
+    local array<ParsedFallbackClass>    Result;
+    local array<string>                 Parts;
+    local ParsedFallbackClass           Entry;
+    local X2SoldierClassTemplateManager Mgr;
+    local string                        RawEntry, ClassName;
+    local int                           i;
+
+    if (!class'ClassHighlander_Utils'.default.bFallbackCacheDirty && class'ClassHighlander_Utils'.default.CachedFallbackClasses.Length > 0) {
+        return class'ClassHighlander_Utils'.default.CachedFallbackClasses;
+    }
+
+    Mgr = class'X2SoldierClassTemplateManager'.static.GetSoldierClassTemplateManager();
+
+    // Parse the string and split it in an array
+    Parts = SplitString(class'ClassHighlander_Utils'.default.FallbackClass, ",");
+    for (i = 0; i < Parts.Length; i++) {
+        RawEntry = Parts[i];
+        // Trim possible spaces
+        RawEntry -= " ";
+        if (RawEntry != "") {
+            // Soft fallback : with {}
+            Entry.bSoft = (Left(RawEntry, 1) == "{" && Right(RawEntry, 1) == "}");
+            if (Entry.bSoft) {
+                ClassName = Mid(RawEntry, 1, Len(RawEntry) - 2);
+            } else {
+                ClassName = RawEntry;
+            }
+
+            Entry.ClassName = name(ClassName);
+            Entry.bValid    = (Mgr.FindSoldierClassTemplate(Entry.ClassName) != none);
+
+            Result.AddItem(Entry);
+        }
+    }
+
+    class'ClassHighlander_Utils'.default.CachedFallbackClasses = Result;
+    class'ClassHighlander_Utils'.default.bFallbackCacheDirty   = false;
+
+    return Result;
+}
+
+static function InvalidateFallbackCache()
+{
+    class'ClassHighlander_Utils'.default.bFallbackCacheDirty = true;
+}
 
 // Classes already in roster
 static function array<name> GetOccupiedClasses()
@@ -191,16 +251,20 @@ static function array<name> GetBlackMarketClasses()
 static function array<name> GetAllLockedClasses(EClassCheckContext Context)
 {
     local array<name> Locked;
-    local array<name> GTSTrained, MissionRewards, BlackMarket;
+    local array<name> GTSTrained, MissionRewards, BlackMarket, HardFallback;
     local name        ClassName;
 
     Locked = GetOccupiedClasses();
     MissionRewards = GetMissionRewardClasses();
 	BlackMarket = GetBlackMarketClasses();
 	GTSTrained = GetGTSQueuedClasses();
+	HardFallback = GetHardFallbackClasses();
 
-	//Special fallback class, always excluded, except if we see later there is no class available, in this case use it.
-	Locked.AddItem(class'ClassHighlander_Utils'.default.FallbackClass);
+	//Hard fallback classes, always excluded, except if we see later there is no class available, in this case use it.
+  	foreach HardFallback(ClassName)  {
+        if (Locked.Find(ClassName) == INDEX_NONE)
+            Locked.AddItem(ClassName);
+    }
 
 	// GTS queue: lock all classes trained in GTS
 	foreach GTSTrained(ClassName)  {
@@ -241,8 +305,8 @@ static function array<name> FilterForGTSContext(array<name> Classes)
         ClassTemplate = Mgr.FindSoldierClassTemplate(ClassName);
         if (ClassTemplate == none) continue;
 
-        // FallbackClass is always locked by default
-        if (ClassName == class'ClassHighlander_Utils'.default.FallbackClass) {
+        // Hard Fallback Classes are always locked by default
+        if (IsHardFallback(ClassName)) {
             Filtered.AddItem(ClassName);
             continue;
         }
@@ -261,25 +325,27 @@ static function bool HasAvailableClasses(EClassCheckContext Context)
 {
     local array<name>                   LockedClasses;
     local X2SoldierClassTemplateManager Mgr;
-    local X2DataTemplate                DataTemplate;
+    local array<X2SoldierClassTemplate> AllTemplates;
     local X2SoldierClassTemplate        ClassTemplate;
+    local int                           i;
 
     LockedClasses = GetAllLockedClasses(Context);
     Mgr = class'X2SoldierClassTemplateManager'.static.GetSoldierClassTemplateManager();
+    AllTemplates  = Mgr.GetAllSoldierClassTemplates();
 
-    foreach Mgr.IterateTemplates(DataTemplate, none) {
-        ClassTemplate = X2SoldierClassTemplate(DataTemplate);
-        if (ClassTemplate == none)                                                          continue;
-        if (ClassTemplate.bMultiplayerOnly)                                                 continue;
-        if (ClassTemplate.DataName == class'ClassHighlander_Utils'.default.FallbackClass)   continue;
-        if (LockedClasses.Find(ClassTemplate.DataName) != INDEX_NONE)                       continue;
+    for (i = 0; i < AllTemplates.Length; i++) {
+        ClassTemplate = AllTemplates[i];
+        if (ClassTemplate == none)                                     continue;
+        if (ClassTemplate.bMultiplayerOnly)                            continue;
+        if (IsHardFallback(ClassTemplate.DataName))                    continue; // ignore hard fallbacks
+        if (LockedClasses.Find(ClassTemplate.DataName) != INDEX_NONE)  continue;
 
         // Don't check not normal soldier classes
         if (ClassTemplate.NumInDeck <= 0)       continue;
         // In GTS, don't check the not GTS allowed classes
-		if (Context == eClassCheck_GTS && ClassTemplate.NumInForcedDeck <= 0) continue;
+        if (Context == eClassCheck_GTS && ClassTemplate.NumInForcedDeck <= 0) continue;
 
-        return true;
+        return true; // normal class or available soft fallback
     }
 
     `LOG("ClassHighlander : No class available (Context=" $ Context $ ").");
@@ -325,4 +391,63 @@ static function bool IsModActive(name ModName)
             return true;
     }
     return false;
+}
+
+static function bool IsHardFallback(name ClassName)
+{
+    local array<ParsedFallbackClass> Entries;
+    local ParsedFallbackClass        Entry;
+
+    Entries = GetParsedFallbackClasses();
+    foreach Entries(Entry) {
+        if (Entry.ClassName == ClassName && !Entry.bSoft)
+            return true;
+    }
+    return false;
+}
+
+static function bool IsSoftFallback(name ClassName)
+{
+    local array<ParsedFallbackClass> Entries;
+    local ParsedFallbackClass        Entry;
+
+    Entries = GetParsedFallbackClasses();
+    foreach Entries(Entry) {
+        if (Entry.ClassName == ClassName && Entry.bSoft)
+            return true;
+    }
+    return false;
+}
+
+static function bool IsAnyFallback(name ClassName)
+{
+    return IsHardFallback(ClassName) || IsSoftFallback(ClassName);
+}
+
+static function array<name> GetHardFallbackClasses()
+{
+    local array<ParsedFallbackClass> Entries;
+    local ParsedFallbackClass        Entry;
+    local array<name>                Result;
+
+    Entries = GetParsedFallbackClasses();
+    foreach Entries(Entry) {
+        if (!Entry.bSoft && Entry.bValid)
+            Result.AddItem(Entry.ClassName);
+    }
+    return Result;
+}
+
+static function array<name> GetValidFallbackClasses()
+{
+    local array<ParsedFallbackClass> Entries;
+    local ParsedFallbackClass        Entry;
+    local array<name>                Result;
+
+    Entries = GetParsedFallbackClasses();
+    foreach Entries(Entry) {
+        if (Entry.bValid)
+            Result.AddItem(Entry.ClassName);
+    }
+    return Result;
 }

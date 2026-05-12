@@ -57,64 +57,80 @@ static event OnPostTemplatesCreated()
 
 static function ValidateAndSetFallbackClass()
 {
+    local array<ParsedFallbackClass>    ConfiguredFallbackClasses;
+    local array<string>                 InvalidClasses;
+    local string                        InvalidList;
+
     local X2SoldierClassTemplateManager Mgr;
     local X2SoldierClassTemplate        ClassTemplate;
     local array<X2SoldierClassTemplate> AllTemplates;
     local X2SoldierClassTemplate        FallbackCandidate;
-    local name                          ConfiguredFallback;
     local int                           i;
 
-    ConfiguredFallback = class'ClassHighlander_Utils'.default.FallbackClass;
+    class'ClassHighlander_Utils'.static.InvalidateFallbackCache();
+    ConfiguredFallbackClasses = class'ClassHighlander_Utils'.static.GetParsedFallbackClasses();
 
-    // Check if the configured fallback class exists
-    Mgr = class'X2SoldierClassTemplateManager'.static.GetSoldierClassTemplateManager();
-    ClassTemplate = Mgr.FindSoldierClassTemplate(ConfiguredFallback);
-
-    if (ClassTemplate != none) {
-        `LOG("ClassHighlander : Fallback class '" $ ConfiguredFallback $ "' validated.");
+    if (ConfiguredFallbackClasses.Length == 0) {
+        `Redscreen("ClassHighlander [WARN] : Empty FallbackClasses!");
         return;
     }
 
-    `LOG("ClassHighlander [WARN] : Fallback class '" $ ConfiguredFallback
-        $ "' not found ! Search a new one...");
+    for (i = ConfiguredFallbackClasses.Length - 1; i >= 0; i--) {
+        if (!ConfiguredFallbackClasses[i].bValid) {
+            InvalidClasses.AddItem(string(ConfiguredFallbackClasses[i].ClassName));
+            `LOG("ClassHighlander [WARN] : Invalid Fallback -> " $ ConfiguredFallbackClasses[i].ClassName);
+            ConfiguredFallbackClasses.Remove(i, 1);
+        }
+    }
 
-    AllTemplates = Mgr.GetAllSoldierClassTemplates();
+    if (InvalidClasses.Length > 0) {
+        for (i = 0; i < InvalidClasses.Length; i++) {
+            if (i > 0) InvalidList $= ",";
+            InvalidList $= InvalidClasses[i];
+        }
+
+        class'ClassHighlander_Utils'.default.bFallbackClassInvalid  = true;
+        class'ClassHighlander_Utils'.default.FallbackClassReplaced  = InvalidList;
+
+        `LOG("ClassHighlander [WARN] : Invalid fallback classes :" $ InvalidList);
+    }
+
+    //If among all fallback classes, none is valid, generate a new one.
     FallbackCandidate = none;
+    if (ConfiguredFallbackClasses.Length == 0) {
+        Mgr = class'X2SoldierClassTemplateManager'.static.GetSoldierClassTemplateManager();
+        AllTemplates = Mgr.GetAllSoldierClassTemplates();
 
-    for (i = 0; i < AllTemplates.Length; i++) {
-        ClassTemplate = AllTemplates[i];
-        if (ClassTemplate == none)                   continue;
-        //if (ClassTemplate.NumInDeck <= 0)            continue;
-        if (ClassTemplate.NumInForcedDeck <= 0)      continue;
-        if (ClassTemplate.bMultiplayerOnly)           continue;
+        for (i = 0; i < AllTemplates.Length; i++) {
+            ClassTemplate = AllTemplates[i];
+            if (ClassTemplate == none)                   continue;
+            //if (ClassTemplate.NumInDeck <= 0)            continue;
+            if (ClassTemplate.NumInForcedDeck <= 0)      continue;
+            if (ClassTemplate.bMultiplayerOnly)           continue;
 
-        // Exclude long war classes (id starting by a "LW_")
-        if (Left(string(ClassTemplate.DataName), 3) == "LW_") continue;
+            // Exclude long war classes (id starting by a "LW_")
+            if (Left(string(ClassTemplate.DataName), 3) == "LW_") continue;
 
-        FallbackCandidate = ClassTemplate;
-        break; // Pick the first one
+            // Pick the first one and replace the config to set it as the new soft fallback
+            FallbackCandidate = ClassTemplate;
+            class'ClassHighlander_Utils'.default.FallbackClass = "{" $ string(FallbackCandidate.DataName) $ "}";
+            class'ClassHighlander_Utils'.static.InvalidateFallbackCache();
+            break;
+        }
+
+        if (FallbackCandidate == none) {
+            `Redscreen("ClassHighlander [ERROR] : No fallback found !");
+            return;
+        }
+
+        `Redscreen(
+            "ClassHighlander WARNING: The configured fallback classes contain invalid classes => '"
+            $ InvalidList
+            $ "' is/are not found in the game. It has been replaced by '"
+            $ string(FallbackCandidate.DataName)
+            $ "' for this session. Please update FallbackClass in XComClassHighlander.ini."
+        );
     }
-
-    if (FallbackCandidate == none) {
-        `LOG("ClassHighlander [ERROR] : No fallback found !");
-        return;
-    }
-
-    // Update the fallback class at runtime
-    class'ClassHighlander_Utils'.default.FallbackClassReplaced = ConfiguredFallback;
-    class'ClassHighlander_Utils'.default.FallbackClass = FallbackCandidate.DataName;
-    class'ClassHighlander_Utils'.default.bFallbackClassInvalid = true;
-
-    `LOG("ClassHighlander : Fallback class replaced by '"
-        $ FallbackCandidate.DataName $ "'.");
-
-    `Redscreen(
-        "ClassHighlander WARNING: The configured fallback class '"
-        $ string(ConfiguredFallback)
-        $ "' was not found in the game. It has been replaced by '"
-        $ string(FallbackCandidate.DataName)
-        $ "' for this session. Please update FallbackClass in XComClassHighlander.ini."
-    );
 }
 
 static function LimitPsiSoldier()
@@ -308,14 +324,15 @@ static function EventListenerReturn OnFirstPromotionOverrideClass(
     Name EventID,
     Object CallbackData)
 {
-    local XComLWTuple               Tuple;
-    local XComGameState_Unit        UnitState;
-    local array<name>               LockedClasses;
-    local array<name>               AvailableClasses;
+    local XComLWTuple                   Tuple;
+    local XComGameState_Unit            UnitState;
+    local array<name>                   LockedClasses;
+    local array<name>                   AvailableClasses;
     local X2SoldierClassTemplateManager Mgr;
-    local X2DataTemplate            DataTemplate;
-    local X2SoldierClassTemplate    ClassTemplate;
-    local name                      AssignedClass;
+    local X2DataTemplate                DataTemplate;
+    local X2SoldierClassTemplate        ClassTemplate;
+    local name                          AssignedClass;
+    local array<name>                   ValidFallbackClasses;
 
     Tuple = XComLWTuple(EventData);
     if (Tuple == none || Tuple.Data.Length < 1) return ELR_NoInterrupt;
@@ -350,7 +367,7 @@ static function EventListenerReturn OnFirstPromotionOverrideClass(
         ClassTemplate = X2SoldierClassTemplate(DataTemplate);
         if (ClassTemplate == none)                                                          continue;
         if (ClassTemplate.bMultiplayerOnly)                                                 continue;
-        if (ClassTemplate.DataName == class'ClassHighlander_Utils'.default.FallbackClass)   continue;
+        if (class'ClassHighlander_Utils'.static.IsHardFallback(ClassTemplate.DataName))     continue;
         if (ClassTemplate.NumInDeck <= 0)                                                   continue;
         if (LockedClasses.Find(ClassTemplate.DataName) != INDEX_NONE)                       continue;
 
@@ -360,12 +377,11 @@ static function EventListenerReturn OnFirstPromotionOverrideClass(
     if (AvailableClasses.Length > 0) {
         Tuple.Data[0].n = AvailableClasses[Rand(AvailableClasses.Length)];
         `LOG("ClassHighlander Promo : Replaced by -> " $ Tuple.Data[0].n);
-    }
-    else
-    {
-        // No more available class ? fallback class (by default => PR_Mercenary)
-        Tuple.Data[0].n = class'ClassHighlander_Utils'.default.FallbackClass;
-        `LOG("ClassHighlander Promo : No available class -> Fallback class (PR_Mercenary ?).");
+    } else {
+        // No more available class ? Pick randomly a valid fallback class (by default => only PR_Mercenary)
+        ValidFallbackClasses = class'ClassHighlander_Utils'.static.GetValidFallbackClasses();
+        Tuple.Data[0].n = ValidFallbackClasses[Rand(ValidFallbackClasses.Length)];
+        `LOG("ClassHighlander Promo : No available class -> Fallback class => " $ Tuple.Data[0].n);
     }
 
     return ELR_NoInterrupt;
@@ -379,9 +395,10 @@ static function EventListenerReturn OnValidateGTSClassTraining(
     Name EventID,
     Object CallbackData)
 {
-    local XComLWTuple            Tuple;
-    local X2SoldierClassTemplate ClassTemplate;
-	local EClassCheckContext	 checkType;
+    local XComLWTuple               Tuple;
+    local X2SoldierClassTemplate    ClassTemplate;
+	local EClassCheckContext	    checkType;
+	local bool			            HasAvailableClasses;
 
 	Tuple = XComLWTuple(EventData);
     
@@ -397,31 +414,49 @@ static function EventListenerReturn OnValidateGTSClassTraining(
 		checkType = eClassCheck_Promotion;
 	}
 
-    // If this is the fallback class : allowed only if there is no available class
-    if (ClassTemplate.DataName == class'ClassHighlander_Utils'.default.FallbackClass) {
+	HasAvailableClasses = class'ClassHighlander_Utils'.static.HasAvailableClasses(checkType);
+
+	if (HasAvailableClasses) {
+	    // There are still some classes available, but this one is currently locked
+	    if (class'ClassHighlander_Utils'.static.IsClassLocked(ClassTemplate.DataName, checkType)) {
+	        `LOG("ClassHighlander : Exclude from pool promo/GTS (locked) -> " $ ClassTemplate.DataName);
+	        Tuple.Data[0].b = false;
+	    }
+	} else {
+	    // No class available = only fallback classes are allowed
+	    if (!class'ClassHighlander_Utils'.static.IsAnyFallback(ClassTemplate.DataName)) {
+	        `LOG("ClassHighlander : Exclude from pool promo/GTS (not fallback) -> " $ ClassTemplate.DataName);
+            Tuple.Data[0].b = false;
+	    }
+	}
+
+	return ELR_NoInterrupt;
+
+
+
+	// If it's a Hard fallback : allowed only if there is no available class
+	/*
+    if (class'ClassHighlander_Utils'.static.IsHardFallback(ClassTemplate.DataName)) {
         if (!class'ClassHighlander_Utils'.static.HasAvailableClasses(checkType)) {
             `LOG("ClassHighlander : Empty pool -> allow the fallback class.");
-            // Keep Data[0].b = true ? The FallbackClass is put inside the pool
         } else {
-            // Some classes are still available ? Exclude the fallback class
+            // Some classes are still available ? Exclude the hard fallback class
             Tuple.Data[0].b = false;
 
-			`LOG("ClassHighlander : Class allowed -> " $ ClassTemplate.DataName);
-
+            `LOG("ClassHighlander : Class allowed -> " $ ClassTemplate.DataName);
         }
         return ELR_NoInterrupt;
     }
 
-    // Other classes : Exclude if locked
-    if (class'ClassHighlander_Utils'.static.IsClassLocked(ClassTemplate.DataName, checkType))
-    {
-        //`LOG("ClassHighlander : Exclude from pool promo/GTS -> " $ ClassTemplate.DataName);
+    // Normal classes and soft fallback classes : Exclude if locked
+    if (class'ClassHighlander_Utils'.static.IsClassLocked(ClassTemplate.DataName, checkType)) {
+        `LOG("ClassHighlander : Exclude from pool promo/GTS -> " $ ClassTemplate.DataName);
         Tuple.Data[0].b = false;
     } else {
-		//`LOG("ClassHighlander : Add pool promo/GTS -> " $ ClassTemplate.DataName);
+		`LOG("ClassHighlander : Add pool promo/GTS -> " $ ClassTemplate.DataName);
 	}
 
-    return ELR_NoInterrupt;
+    return ELR_NoInterrupt;*/
 }
 
 static function EventListenerReturn OnFinalizeMecTrooperClasses(
@@ -497,6 +532,7 @@ static function EventListenerReturn OnRewardUnitGenerated(
     local X2SoldierClassTemplate        ClassTemplate;
     local name                          CurrentClass;
     local name                          NewClassName;
+    local array<name>                   ValidFallbackClasses;
 
     UnitState = XComGameState_Unit(EventData);
     if (UnitState == none)      return ELR_NoInterrupt;
@@ -525,15 +561,14 @@ static function EventListenerReturn OnRewardUnitGenerated(
 
     `LOG("ClassHighlander Reward : " $ AvailableClasses.Length $ " available classes.");
 
-	//If 4 or more classes still available = change class otherwise set it to fallback class
-    if (AvailableClasses.Length >= 4)
-    {
+	// If 4 or more classes still available = change class otherwise set it to fallback classes
+    if (AvailableClasses.Length >= 4) {
         NewClassName = AvailableClasses[Rand(AvailableClasses.Length)];
         `LOG("ClassHighlander Reward : Replaced by -> " $ NewClassName);
-    }
-    else
-    {
-        NewClassName = class'ClassHighlander_Utils'.default.FallbackClass;
+    } else {
+        // Pick randomly a valid fallback class
+        ValidFallbackClasses = class'ClassHighlander_Utils'.static.GetValidFallbackClasses();
+        NewClassName = ValidFallbackClasses[Rand(ValidFallbackClasses.Length)];
         `LOG("ClassHighlander Reward : Less than 3 classes available -> Fallback class (PR_Mercenary ?).");
     }
 
@@ -733,13 +768,23 @@ static function DisplayAlertFallbackMissing()
 {
     local TDialogueBoxData  DialogData;
     local XGParamTag        LocTag;
+    local array<name>       ValidClasses;
+    local string            ValidList;
+    local int               i;
 
-    // We have checked at the start of the game in OnPostTemplatesCreated if the fallback class was valid.
+    // We have checked at the start of the game in OnPostTemplatesCreated if all the fallback classes were valid.
     // If it was not, display an alert to the user
     if (class'ClassHighlander_Utils'.default.bFallbackClassInvalid) {
+        // Update
+        ValidClasses = class'ClassHighlander_Utils'.static.GetValidFallbackClasses();
+        for (i = 0; i < ValidClasses.Length; i++) {
+            if (i > 0) ValidList $= ",";
+            ValidList $= ValidClasses[i];
+        }
+
         LocTag = XGParamTag(`XEXPANDCONTEXT.FindTag("XGParam"));
-        LocTag.StrValue0 = string(class'ClassHighlander_Utils'.default.FallbackClassReplaced);
-        LocTag.StrValue1 = string(class'ClassHighlander_Utils'.default.FallbackClass);
+        LocTag.StrValue0 = class'ClassHighlander_Utils'.default.FallbackClassReplaced;
+        LocTag.StrValue1 = ValidList;
 
         DialogData.eType     = eDialog_Alert;
         DialogData.strTitle  = class'ClassHighlander_Utils'.default.strFallbackWarningTitle;

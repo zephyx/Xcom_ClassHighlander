@@ -24,6 +24,7 @@ event OnReceiveFocus(UIScreen Screen)
 private function FilterOccupiedClasses(UIChooseClass Screen)
 {
     local array<name>			LockedClasses;
+    local bool			        HasAvailableClasses;
     local UIPanel				Item;
     local int					i, HiddenCount;
     local name					ClassName;
@@ -37,12 +38,7 @@ private function FilterOccupiedClasses(UIChooseClass Screen)
 	}
 
     LockedClasses = class'ClassHighlander_Utils'.static.GetAllLockedClasses(checkType);
-
-	//`LOG(checkType);
-	//`LOG(LockedClasses.Length);
-	//`LOG(Screen.m_arrClasses.Length);
-	//`LOG(Screen.List.ItemCount);
-	//`LOG(class'ClassHighlander_Utils'.static.GetAllLockedClasses(eClassCheck_GTS).Length);
+    HasAvailableClasses = class'ClassHighlander_Utils'.static.HasAvailableClasses(checkType);
 
     if (LockedClasses.Length == 0)          return;
     if (Screen.m_arrClasses.Length == 0)    return;
@@ -52,13 +48,17 @@ private function FilterOccupiedClasses(UIChooseClass Screen)
         if (Screen.m_arrClasses[i] == none) continue;
         ClassName = Screen.m_arrClasses[i].DataName;
 
-        if (ClassName != class'ClassHighlander_Utils'.default.FallbackClass && LockedClasses.Find(ClassName) != INDEX_NONE) {
-            Item = Screen.List.GetItem(i);
-            if (Item != none) {
-                Item.Hide();
-                HiddenCount++;
-                `LOG("ClassHighlander [fallback UI] : Hide -> " $ ClassName);
-            }
+        // class available
+        if (LockedClasses.Find(ClassName) == INDEX_NONE) continue;
+        // no class available but this class is a fallback
+        if (!HasAvailableClasses && class'ClassHighlander_Utils'.static.IsAnyFallback(ClassName)) continue;
+
+        // otherwise hide this class
+        Item = Screen.List.GetItem(i);
+        if (Item != none) {
+            Item.Hide();
+            HiddenCount++;
+            `LOG("ClassHighlander [fallback UI] : Hide -> " $ ClassName);
         }
     }
 
