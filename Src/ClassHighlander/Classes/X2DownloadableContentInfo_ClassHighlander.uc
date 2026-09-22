@@ -1,6 +1,8 @@
 class X2DownloadableContentInfo_ClassHighlander extends X2DownloadableContentInfo;
 
 var delegate<X2StaffSlotTemplate.IsUnitValidForSlot> OriginalIsUnitValidForPsiSlotFn;
+var delegate<X2RewardTemplate.IsRewardAvailableDelegate> OriginalIsFactionSoldierRewardAvailableFn;
+var delegate<X2RewardTemplate.IsRewardAvailableDelegate> OriginalIsExtraFactionSoldierRewardAvailableFn;
 
 static event InstallNewCampaign(XComGameState StartState)
 {
@@ -22,6 +24,7 @@ static event OnLoadedSavedGameToStrategy()
 static event OnPostMission()
 {
     RegisterEvents();
+	AddNewStaffSlotsPsiChamber();
     DisplayAlertFallbackMissing();
 }
 
@@ -35,6 +38,9 @@ static event OnPostTemplatesCreated()
     ValidateAndSetFallbackClass();
     // Limit to 1 psi soldiers
     LimitPsiSoldier();
+    // Prevent Covert Actions from offering a faction hero whose class is already in the roster.
+    // Relies on ClassHighlander CHDLCRunOrder (Config/XComGame.ini) to run after LW_FactionBalance.
+    PatchFactionHeroRewardAvailability();
 
     if (!class'XComGameState_HeadquartersProject_Introspection'.default.bPsiLabIntro) {
         `LOG("ClassHighlander : bPsiLabIntro=false -> skip.");
@@ -244,7 +250,65 @@ static function array<StaffUnitInfo> GetValidUnitsForPsiChamberSlot_CH(
     return ValidUnits;
 }
 
+// Prevent Covert Actions from offering a faction hero (Reaper/Skirmisher/Templar) whose class is already in the roster.
+// Wraps whatever IsRewardAvailableFn is set at this point (vanilla or e.g. LW_FactionBalance's own override) --
+// see the ClassHighlander CHDLCRunOrder entry (Config/XComGame.ini) that forces us to run after LW_FactionBalance.
+static function PatchFactionHeroRewardAvailability()
+{
+    local X2StrategyElementTemplateManager          StratMgr;
+    local X2RewardTemplate                          RewardTemplate;
+    local X2DownloadableContentInfo_ClassHighlander DLCInfo;
+    local array<X2DownloadableContentInfo>          DLCInfos;
+    local int                                       i;
 
+    DLCInfos = `ONLINEEVENTMGR.GetDLCInfos(false);
+    for (i = 0; i < DLCInfos.Length; i++) {
+        DLCInfo = X2DownloadableContentInfo_ClassHighlander(DLCInfos[i]);
+        if (DLCInfo != none)
+            break;
+    }
+    if (DLCInfo == none) return;
+
+    StratMgr = class'X2StrategyElementTemplateManager'.static.GetStrategyElementTemplateManager();
+
+    RewardTemplate = X2RewardTemplate(StratMgr.FindStrategyElementTemplate('Reward_FactionSoldier'));
+    if (RewardTemplate != none) {
+        DLCInfo.OriginalIsFactionSoldierRewardAvailableFn = RewardTemplate.IsRewardAvailableFn;
+        RewardTemplate.IsRewardAvailableFn = DLCInfo.IsFactionSoldierRewardAvailable_CH;
+    }
+
+    RewardTemplate = X2RewardTemplate(StratMgr.FindStrategyElementTemplate('Reward_ExtraFactionSoldier'));
+    if (RewardTemplate != none) {
+        DLCInfo.OriginalIsExtraFactionSoldierRewardAvailableFn = RewardTemplate.IsRewardAvailableFn;
+        RewardTemplate.IsRewardAvailableFn = DLCInfo.IsExtraFactionSoldierRewardAvailable_CH;
+    }
+
+    `LOG("ClassHighlander : Faction hero reward availability patched (duplicate class guard).");
+}
+
+function bool IsFactionSoldierRewardAvailable_CH(optional XComGameState NewGameState, optional StateObjectReference AuxRef)
+{
+    local bool bAvailable;
+
+    if (OriginalIsFactionSoldierRewardAvailableFn != none && !OriginalIsFactionSoldierRewardAvailableFn(NewGameState, AuxRef))
+        return false;
+
+    bAvailable = !class'ClassHighlander_Utils'.static.IsFactionHeroClassLocked(AuxRef);
+    `LOG("ClassHighlander : IsFactionSoldierRewardAvailable_CH returning" @ bAvailable @ "for AuxRef ObjectID" @ AuxRef.ObjectID);
+    return bAvailable;
+}
+
+function bool IsExtraFactionSoldierRewardAvailable_CH(optional XComGameState NewGameState, optional StateObjectReference AuxRef)
+{
+    local bool bAvailable;
+
+    if (OriginalIsExtraFactionSoldierRewardAvailableFn != none && !OriginalIsExtraFactionSoldierRewardAvailableFn(NewGameState, AuxRef))
+        return false;
+
+    bAvailable = !class'ClassHighlander_Utils'.static.IsFactionHeroClassLocked(AuxRef);
+    `LOG("ClassHighlander : IsExtraFactionSoldierRewardAvailable_CH returning" @ bAvailable @ "for AuxRef ObjectID" @ AuxRef.ObjectID);
+    return bAvailable;
+}
 
 
 
@@ -483,7 +547,7 @@ static function EventListenerReturn OnFinalizeMecTrooperClasses(
     class'ClassHighlander_Utils'.default.PendingLockedMECTitles.Length = 0;
 
 	// Don't set eClassCheck_GTS otherwise MEC classes will be excluded and it won't works properly
-    LockedClasses = class'ClassHighlander_Utils'.static.GetAllLockedClasses(eClassCheck_promotion);
+    LockedClasses = class'ClassHighlander_Utils'.static.GetAllLockedClasses(eClassCheck_Promotion);
 	if (LockedClasses.Length == 0) return ELR_NoInterrupt;
 
     // Filter the MEC classes display name
@@ -641,7 +705,6 @@ static function AddNewStaffSlotsPsiChamber()
     local XComGameState                     NewGameState;
     local bool                              bIntrospectionInDefs;
     local bool                              bIntrospectionInGameState;
-    local bool                              DidChange;
     local int                               i;
     local X2FacilityUpgradeTemplate         UpgradeTemplate;
     local int                               UpgradeIdx;
@@ -753,15 +816,10 @@ static function AddNewStaffSlotsPsiChamber()
     StaffSlotState.LockSlot();
     FacilityState.StaffSlots.AddItem(StaffSlotState.GetReference());
 
-    DidChange = true;
     `LOG("ClassHighlander PsiChamber : Slot Introspection created and added (locked).");
 
-    if (DidChange) {
-        `GAMERULES.SubmitGameState(NewGameState);
-        `LOG("ClassHighlander PsiChamber : Game state submitted.");
-    } else {
-        `XCOMHISTORY.CleanupPendingGameState(NewGameState);
-    }
+    `GAMERULES.SubmitGameState(NewGameState);
+    `LOG("ClassHighlander PsiChamber : Game state submitted.");
 }
 
 static function DisplayAlertFallbackMissing()

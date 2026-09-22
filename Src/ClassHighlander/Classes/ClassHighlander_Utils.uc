@@ -424,6 +424,24 @@ static function bool IsAnyFallback(name ClassName)
     return IsHardFallback(ClassName) || IsSoftFallback(ClassName);
 }
 
+// Check if a faction's champion class (Reaper/Skirmisher/Templar) is already present in the roster.
+// FactionRef is the XComGameState_ResistanceFaction reference passed as AuxRef to X2RewardTemplate.IsRewardAvailableFn.
+static function bool IsFactionHeroClassLocked(StateObjectReference FactionRef)
+{
+    local XComGameState_ResistanceFaction FactionState;
+    local name                            ChampionClass;
+    local array<name>                     OccupiedClasses;
+
+    FactionState = XComGameState_ResistanceFaction(`XCOMHISTORY.GetGameStateForObjectID(FactionRef.ObjectID));
+    if (FactionState == none) return false;
+
+    ChampionClass = FactionState.GetChampionClassName();
+    if (ChampionClass == '') return false;
+
+    OccupiedClasses = GetOccupiedClasses();
+    return OccupiedClasses.Find(ChampionClass) != INDEX_NONE;
+}
+
 static function array<name> GetHardFallbackClasses()
 {
     local array<ParsedFallbackClass> Entries;
