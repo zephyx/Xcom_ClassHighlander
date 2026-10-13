@@ -28,6 +28,12 @@ static event OnPostMission()
     DisplayAlertFallbackMissing();
 }
 
+// Before any template is created: puts the player's Mod Config Menu values (if any) into the config defaults, so the values baked into templates are his.
+static function OnPreCreateTemplates()
+{
+    class'ClassHighlander_MCMSettings'.static.ApplyOverrides();
+}
+
 // Just after the game templates loading
 static event OnPostTemplatesCreated()
 {

@@ -7,6 +7,7 @@
     <SteamPublishID>0</SteamPublishID>
     <AssemblyName>ClassHighlander</AssemblyName>
     <RootNamespace>ClassHighlander</RootNamespace>
+    <ProjectGuid>{b7545f31-74cc-4835-8a61-78501370a1a4}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
     <Folder Include="Config\" />
@@ -14,6 +15,8 @@
     <Folder Include="Src\" />
     <Folder Include="Src\ClassHighlander\" />
     <Folder Include="Src\ClassHighlander\Classes\" />
+    <Folder Include="Src\ModConfigMenuAPI\" />
+    <Folder Include="Src\ModConfigMenuAPI\Classes\" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Config\XComGameCore.ini">
@@ -22,7 +25,7 @@
     <Content Include="Config\XComClassHighlander.ini">
       <SubType>Content</SubType>
     </Content>
-	<Content Include="Config\XComGameData.ini">
+    <Content Include="Config\XComGameData.ini">
       <SubType>Content</SubType>
     </Content>
     <Content Include="ReadMe.txt" />
@@ -33,7 +36,7 @@
     <Content Include="Localization\ClassHighlander.int" />
     <Content Include="Localization\ClassHighlander.fra" />
     <Content Include="Localization\XComGame.int" />
-	<Content Include="Localization\XComGame.fra" />
+    <Content Include="Localization\XComGame.fra" />
     <Content Include="Src\ClassHighlander\Classes\ClassHighlander_Utils.uc">
       <SubType>Content</SubType>
     </Content>
@@ -56,6 +59,21 @@
       <SubType>Content</SubType>
     </Content>
     <Content Include="Src\ClassHighlander\Classes\X2DownloadableContentInfo_ClassHighlander.uc" />
+    <Content Include="Src\ClassHighlander\Classes\ClassHighlander_MCMSettings.uc" />
+    <Content Include="Src\ClassHighlander\Classes\ClassHighlander_IniCache.uc" />
+    <Content Include="Src\ClassHighlander\Classes\ClassHighlander_MCMScreen.uc" />
+    <Content Include="Src\ClassHighlander\Classes\UIScreenListener_CH_MCM.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Button.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Checkbox.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Dropdown.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Instance.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Label.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Setting.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_SettingsGroup.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_SettingsPage.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Slider.uc" />
+    <Content Include="Src\ModConfigMenuAPI\Classes\MCM_API_Spinner.uc" />
   </ItemGroup>
   <Import Project="$(MSBuildLocalExtensionPath)\XCOM2.targets" />
 </Project>
