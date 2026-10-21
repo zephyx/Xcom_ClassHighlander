@@ -395,7 +395,8 @@ static function EventListenerReturn OnFirstPromotionOverrideClass(
     Object CallbackData)
 {
     local XComLWTuple                   Tuple;
-    local XComGameState_Unit            UnitState;
+    local XComGameState_Unit            UnitState, PrevUnitState;
+    local name                          PrevClassName;
     local array<name>                   LockedClasses;
     local array<name>                   AvailableClasses;
     local X2SoldierClassTemplateManager Mgr;
@@ -415,6 +416,17 @@ static function EventListenerReturn OnFirstPromotionOverrideClass(
 	if (UnitState.GetRank() > 0) {
 		`LOG("ClassHighlander Promo : Ignored (probably respecSoldier)");
 		return ELR_NoInterrupt;
+	}
+
+	// Console commands that reset a soldier to rank 0 (ex: ResetSelectedSoldiersClass from SoldierConsoleCommands) zero the kills/StartingRank, so GetRank() is 0
+	// and the check above is not enough. A real first promotion starts from a Rookie, and a freshly generated reward soldier is not in the history yet.
+	PrevUnitState = XComGameState_Unit(`XCOMHISTORY.GetGameStateForObjectID(UnitState.ObjectID));
+	if (PrevUnitState != none) {
+		PrevClassName = PrevUnitState.GetSoldierClassTemplateName();
+		if (PrevClassName != '' && PrevClassName != 'None' && PrevClassName != 'Rookie') {
+			`LOG("ClassHighlander Promo : Ignored (soldier already has a class -> " $ PrevClassName $ ", reset/respec command)");
+			return ELR_NoInterrupt;
+		}
 	}
 
     AssignedClass = Tuple.Data[0].n;
